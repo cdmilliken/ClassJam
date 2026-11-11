@@ -3,7 +3,7 @@
 </style></head><body><main>
 <header><div><div class="eyebrow">A little change goes a long way</div><h1>Small Wonder<span style="color:#c1db83">.</span></h1><p>A 3D platforming adventure. Three sizes. A greenhouse to restore.</p></div><span class="badge">THINK SMALL · JUMP BIG</span></header>
 <div class="stage"><canvas id="game" width="1100" height="660" style="aspect-ratio:1100/660" aria-label="3D platform game. WASD to move, Space to jump, Q to shrink, E to grow. Drag to orbit the camera, scroll to zoom, J and L rotate, I and K tilt, C resets the camera."></canvas>
-<div id="intro" class="overlay"><div class="card"><div class="eyebrow">A tiny gardener. A bigger adventure.</div><h2>A change<br>of perspective.</h2><p>Cross five floating greenhouse terraces. Open each gate, jump the gaps, and gather five seeds. The final two seeds sit on raised platforms.</p><div class="steps"><div><b>HOLD Q · TINY</b>Collect delicate seeds and slip under gates.</div><div><b>RELEASE · NORMAL</b>Explore and jump between terraces.</div><div><b>HOLD E · GIANT</b>Become heavy enough to press switches.</div></div><button id="start">Enter the greenhouse →</button><p style="font-size:12px">WASD / arrows: move · Space: jump · Drag to orbit · Scroll to zoom · C resets camera · About 3–5 minutes<br>Fell off? You return to your latest terrace. Seeds stay collected.</p></div></div>
+<div id="intro" class="overlay"><div class="card"><div class="eyebrow">A tiny gardener. A bigger adventure.</div><h2>A change<br>of perspective.</h2><p>Five gardens. Five seeds. A winding course of moving stones, crumbling platforms, and steam vents. Line up your jumps and change size to restore the greenhouse.</p><div class="steps"><div><b>HOLD Q · TINY</b>Collect delicate seeds and slip under gates.</div><div><b>RELEASE · NORMAL</b>Explore and jump between terraces.</div><div><b>HOLD E · GIANT</b>Become heavy enough to press switches.</div></div><button id="start">Enter the greenhouse →</button><p style="font-size:12px">WASD / arrows: move · Space: jump · Drag to orbit · Scroll to zoom · C resets camera · Aim for 5 minutes · No time limit<br>Blue stones move. Orange stones crumble after 1.5 seconds. Time your jumps past red steam.<br>Each garden and seed platform saves a checkpoint. Collected seeds stay safe.</p></div></div>
 <div id="ending" class="overlay" hidden><div class="card"><div class="eyebrow">A small act. A new beginning.</div><h2>You grew a<br>little wonder.</h2><p id="result"></p><button id="again">Grow again ↻</button></div></div>
 <button id="resume" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none">Paused · Click to resume</button></div>
 <p id="message" role="status" aria-live="polite">Grow to press switches. Shrink to collect seeds. Jump to new heights.</p>
@@ -12,54 +12,115 @@
 </main><script>
 'use strict';
 const canvas=document.getElementById('game'),ctx=canvas.getContext('2d'),message=document.getElementById('message'),keys=new Set();
-const terraces=[{x:-8,z:-10,w:16,d:17,y:0},{x:-7,z:-22,w:14,d:10,y:1},{x:-6,z:-35,w:12,d:11,y:2},{x:-5,z:-48.5,w:10,d:11,y:2.8},{x:-4,z:-62,w:8,d:11,y:3.6}];
-const gateZ=[-4,-16,-28,-41.5,-55],switchZ=[0,-13.5,-25.5,-39,-52.5],seedZ=[-7,-19,-32,-45,-58.5];
-const perches=[{x:1.8,z:-46,w:2.2,d:2.2,y:3.8},{x:1.3,z:-59.5,w:2.2,d:2.2,y:4.6}];
+// Five checkpoint gardens connected by winding, increasingly precise platform routes.
+const routeOffsets=[[0,-12],[3,-15],[6,-18],[6,-22],[2.5,-24],[-1,-24],[-4.5,-26],[-6,-29.5],[-2.5,-32],[1,-34.5],[4,-37],[4,-41],[.5,-43],[-3,-45.5],[-3,-50],[0,-53.5]];
+const terraces=Array.from({length:5},(_,i)=>({x:-5,z:-i*58-10,w:10,d:12,y:i,zone:i}));
+const gateZ=terraces.map((p,i)=>-i*58-5),switchZ=terraces.map((p,i)=>-i*58-1);
+const course=terraces.flatMap((p,zone)=>routeOffsets.map(([x,z],step)=>{const width=step===8?3.6:Math.max(1.65,2.8-zone*.18),height=[.4,.8,1.2,1.2,1.6,1.6,1.2,1.2,.8,.8,.4,.4,.8,.8,.4,.4][step];return {x:(zone%2?-x:x)-width/2,z:-zone*58+z-width/2,w:width,d:width,y:zone+height,zone,step,baseX:(zone%2?-x:x)-width/2,kind:step===3||step===7?'moving':step===5||step===14?'crumble':step===11?'vent':'stone',fallAt:Infinity};}));
+const shortcuts=terraces.map((p,zone)=>({x:zone%2?-6:-1,z:-zone*58-22.25,w:7,d:.5,y:zone+1.2,zone,kind:'beam'}));
+const finish={x:-4,z:-294,w:8,d:6,y:5,zone:4,finish:true};
+const zoneNames=['NURSERY','WINDING ROOTS','SKY GARDEN','CLOUD WALK','CROWN CANOPY'];
+function platformActive(p){return p.kind!=='crumble'||elapsed<p.fallAt+1.5||elapsed>p.fallAt+4.5;}
+function updatePlatforms(){for(const p of course){if(p.kind==='moving')p.x=p.baseX+Math.sin(elapsed*1.25+p.zone)*.8;if(p.kind==='crumble'&&elapsed>p.fallAt+4.5)p.fallAt=Infinity;}}
+function ventActive(p){return (elapsed+p.zone*.7)%3.8>2.8;}
+function routeSurfaces(){return [...terraces,...course.filter(platformActive),...shortcuts,finish];}
 let cameraYaw=0,cameraPitch=.6,cameraDistance=25,cameraTarget={x:0,y:1,z:1},cameraPos={},drag=null;
-function resetCamera(){cameraYaw=0;cameraPitch=.6;cameraDistance=25;}
-function surfaces(){return [...terraces,...perches];}
-let player,seeds,switches,elapsed,started=false,won=false,paused=false,last=0,jumpQueued=false,checkpoint=0,noticeUntil=0,polygons=[],labels=[];
+function resetCamera(){cameraYaw=0;cameraPitch=.7;cameraDistance=23;}
+function surfaces(){return routeSurfaces();}
+let player,seeds,switches,elapsed,started=false,won=false,paused=false,last=0,jumpQueued=false,coyoteUntil=0,jumpBufferUntil=0,checkpoint=0,checkpointSpot={x:0,y:0,z:0},falls=0,noticeUntil=0,polygons=[],labels=[];
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-function reset(){player={x:0,y:0,z:4,size:1,vy:0,grounded:true};seeds=terraces.map((p,i)=>({x:i===4?2.4:3,z:seedZ[i],y:p.y+(i>=3?1:0),taken:false}));switches=terraces.map((p,i)=>({x:i<3?-4:-2.5,z:switchZ[i],y:p.y,on:false}));elapsed=0;checkpoint=0;won=false;paused=false;noticeUntil=0;resetCamera();cameraTarget={x:0,y:1,z:1};keys.clear();jumpQueued=false;document.getElementById('ending').hidden=true;document.getElementById('resume').style.display='none';}
+function reset(){player={x:0,y:0,z:0,size:1,vy:0,grounded:true};seeds=terraces.map((p,i)=>{const pad=course.find(c=>c.zone===i&&c.step===8);return {x:pad.x+pad.w/2,z:pad.z+pad.d/2,y:pad.y,taken:false};});switches=terraces.map((p,i)=>({x:-3,z:switchZ[i],y:p.y,on:false}));elapsed=0;checkpoint=0;checkpointSpot={x:0,y:0,z:0};falls=0;for(const p of course){p.x=p.baseX;p.fallAt=Infinity;}won=false;paused=false;noticeUntil=0;resetCamera();cameraTarget={x:0,y:1,z:-2};keys.clear();jumpQueued=false;coyoteUntil=0;jumpBufferUntil=0;document.getElementById('ending').hidden=true;document.getElementById('resume').style.display='none';}
 function tell(t){message.textContent=t;noticeUntil=elapsed+3;}
-function blocks(){const b=[];terraces.forEach((p,i)=>{const z=gateZ[i];b.push({x:p.x,y:p.y,z:z-.3,w:-.52-p.x,h:5,d:.6},{x:.52,y:p.y,z:z-.3,w:p.x+p.w-.52,h:5,d:.6},{x:-.52,y:p.y+.85,z:z-.3,w:1.04,h:4.15,d:.6});if(!switches[i].on)b.push({x:-.52,y:p.y,z:z-.3,w:1.04,h:.85,d:.6});});perches.forEach(p=>b.push({x:p.x,y:p.y-1,z:p.z,w:p.w,h:1,d:p.d}));return b;}
+function blocks(){const b=[];terraces.forEach((p,i)=>{const z=gateZ[i];b.push({x:p.x,y:p.y,z:z-.3,w:-.52-p.x,h:5,d:.6},{x:.52,y:p.y,z:z-.3,w:p.x+p.w-.52,h:5,d:.6},{x:-.52,y:p.y+.85,z:z-.3,w:1.04,h:4.15,d:.6});if(!switches[i].on)b.push({x:-.52,y:p.y,z:z-.3,w:1.04,h:.85,d:.6});});return b;}
 function collides(x,y,z,size){const r=size*.36,h=size*1.3;return blocks().some(b=>x+r>b.x&&x-r<b.x+b.w&&z+r>b.z&&z-r<b.z+b.d&&y+h>b.y+.01&&y<b.y+b.h-.01);}
-function respawn(){const p=terraces[checkpoint];player={x:0,z:checkpoint===0?4:terraces[checkpoint].z+terraces[checkpoint].d-1,y:p.y,size:1,vy:0,grounded:true};jumpQueued=false;tell('Back on solid ground. Your seeds and unlocked gates are safe!');}
-function update(dt){if(!started||won||paused)return;elapsed+=dt;
+function respawn(){player={...checkpointSpot,size:1,vy:0,grounded:true};falls++;jumpQueued=false;coyoteUntil=-1;jumpBufferUntil=-1;keys.clear();tell('Checkpoint restored. Seeds and unlocked gates are safe. Take your time lining up the next jump.');}
+function saveCheckpoint(p){checkpoint=p.zone;checkpointSpot={x:p.x+p.w/2,y:p.y,z:p.z+p.d/2};tell(p.step===8?'Seed platform reached. Midpoint checkpoint saved!':'New garden! Checkpoint saved. Grow on its peach switch.');}
+function update(dt){if(!started||won||paused)return;elapsed+=dt;updatePlatforms();const standing=surfaces().find(p=>player.grounded&&Math.abs(player.y-p.y)<.02&&player.x>p.x&&player.x<p.x+p.w&&player.z>p.z&&player.z<p.z+p.d);if(standing?.kind==='moving')player.x+=(Math.sin(elapsed*1.25+standing.zone)-Math.sin((elapsed-dt)*1.25+standing.zone))*.8;
 cameraYaw+=(Number(keys.has('l'))-Number(keys.has('j')))*dt*1.7;cameraPitch=clamp(cameraPitch+(Number(keys.has('i'))-Number(keys.has('k')))*dt,.22,1.25);
 
 const desired=keys.has('q')?.35:keys.has('e')?1.9:1,ns=player.size+clamp(desired-player.size,-dt*4,dt*4);if(!collides(player.x,player.y,player.z,ns))player.size=ns;
 let dx=Number(keys.has('d')||keys.has('arrowright'))-Number(keys.has('a')||keys.has('arrowleft')),dz=Number(keys.has('s')||keys.has('arrowdown'))-Number(keys.has('w')||keys.has('arrowup'));const len=Math.hypot(dx,dz)||1,speed=player.size>1.5?4.1:player.size<.5?5:6;const mx=dx/len*speed*dt,mz=dz/len*speed*dt;dx=mx*Math.cos(cameraYaw)+mz*Math.sin(cameraYaw);dz=mz*Math.cos(cameraYaw)-mx*Math.sin(cameraYaw);
 if(!collides(player.x+dx,player.y,player.z,player.size))player.x+=dx;if(!collides(player.x,player.y,player.z+dz,player.size))player.z+=dz;
-if(jumpQueued&&player.grounded){player.vy=9.5;player.grounded=false;}jumpQueued=false;
+if(jumpQueued)jumpBufferUntil=elapsed+.12;if(jumpBufferUntil>=elapsed&&(player.grounded||elapsed<=coyoteUntil)){player.vy=9.5;player.grounded=false;coyoteUntil=-1;jumpBufferUntil=-1;}jumpQueued=false;
 const oldY=player.y;player.vy-=22*dt;let nextY=player.y+player.vy*dt;player.grounded=false;
 if(player.vy>0&&collides(player.x,nextY,player.z,player.size)){player.vy=0;nextY=oldY;}
-surfaces().forEach((p,i)=>{const r=player.size*.25;if(player.x>p.x-r&&player.x<p.x+p.w+r&&player.z>p.z-r&&player.z<p.z+p.d+r&&oldY>=p.y-.01&&nextY<=p.y&&player.vy<=0){nextY=p.y;player.vy=0;player.grounded=true;if(i<terraces.length&&i>checkpoint){checkpoint=i;tell('New terrace! Checkpoint saved. Find its heavy switch.');}}});player.y=nextY;
-if(player.y<-9){respawn();return;}
+surfaces().forEach((p,i)=>{const r=player.size*.18;if(player.x>p.x-r&&player.x<p.x+p.w+r&&player.z>p.z-r&&player.z<p.z+p.d+r&&oldY>=p.y-.01&&nextY<=p.y&&player.vy<=0){nextY=p.y;player.vy=0;player.grounded=true;if(p.kind==='crumble'&&p.fallAt===Infinity)p.fallAt=elapsed;
+if(p.zone>checkpoint&&seeds.slice(0,p.zone).every(s=>s.taken)){saveCheckpoint(p);checkpointSpot.z=p.z+p.d-1;}
+if(p.step===8&&p.zone===checkpoint&&checkpointSpot.z>p.z+p.d)saveCheckpoint(p);
+}});player.y=nextY;if(player.grounded)coyoteUntil=elapsed+.08;
+if(player.y<terraces[checkpoint].y-7){respawn();return;}
+for(const p of course){if(p.kind==='vent'&&ventActive(p)&&player.y>=p.y-.05&&player.y<p.y+.7&&player.x>p.x-.1&&player.x<p.x+p.w+.1&&player.z>p.z-.1&&player.z<p.z+p.d+.1){respawn();tell('Steam burst! Wait for the blue vent to cool, or jump over the burst.');return;}}
 switches.forEach((s,i)=>{if(!s.on&&player.grounded&&Math.abs(player.y-s.y)<.1&&Math.hypot(player.x-s.x,player.z-s.z)<1.15){if(player.size>1.75){s.on=true;tell('Gate '+(i+1)+' unlocked! Hold Q and go through the small opening in its center.');}else tell('You need more weight. Hold E to become GIANT and press this switch.');}});
 seeds.forEach(s=>{if(!s.taken&&Math.abs(player.y-s.y)<.65&&Math.hypot(player.x-s.x,player.z-s.z)<.85){if(player.size<.45){s.taken=true;tell('Seed collected! '+seeds.filter(s=>s.taken).length+' / '+seeds.length+'.');}else tell('Still too big! Hold Q to become TINY and collect this seed.');}});
-if(player.grounded&&Math.abs(player.y-3.6)<.1&&Math.hypot(player.x+1.8,player.z+60.5)<1.6){if(seeds.every(s=>s.taken)){won=true;keys.clear();document.getElementById('ending').hidden=false;document.getElementById('result').textContent='Five seeds planted. Five terraces restored. You finished in '+Math.floor(elapsed/60)+'m '+Math.floor(elapsed%60)+'s. A little change makes a world of difference.';document.getElementById('again').focus();tell('The greenhouse is blooming again!');}else tell('Bring all five golden seeds to this planter.');}
-if(elapsed>noticeUntil)message.textContent=seeds.every(s=>s.taken)?'All seeds found! Reach the planter at the far end of the last terrace.':!switches[checkpoint].on?'Find the peach switch. Hold E to become heavy enough.':checkpoint>=3?'Jump onto the raised seed platform, then hold Q to collect. Release Q before the next big jump.':'Hold Q to pass through the gate. Find the seed, then release Q and jump across the gap.';
+if(player.grounded&&Math.abs(player.y-5)<.1&&Math.hypot(player.x,player.z+291)<1.6){if(seeds.every(s=>s.taken)){won=true;keys.clear();document.getElementById('ending').hidden=false;document.getElementById('result').textContent='Five seeds planted. Five terraces restored. You finished in '+Math.floor(elapsed/60)+'m '+Math.floor(elapsed%60)+'s with '+falls+' checkpoint returns. A little change makes a world of difference.';document.getElementById('again').focus();tell('The greenhouse is blooming again!');}else tell('Bring all five golden seeds to this planter.');}
+if(elapsed>noticeUntil)message.textContent=seeds.every(s=>s.taken)?'Five seeds found! Finish the final platform run and reach the glowing planter.':!switches[checkpoint].on?'Hold E on the peach switch, then hold Q to slip through the gate.':'Follow the numbered stones. Space jumps; release Q for long jumps. Blue moves · Orange crumbles · Red steam burns. Seed platforms save a checkpoint.';
 }
-// Perspective projection of real world coordinates; faces are sorted back to front.
-function project(x,y,z){const vx=x-cameraPos.x,vy=y-cameraPos.y,vz=z-cameraPos.z,sy=Math.sin(cameraYaw),cy=Math.cos(cameraYaw),sp=Math.sin(cameraPitch),cp=Math.cos(cameraPitch),radial=vx*sy+vz*cy,depth=-radial*cp-vy*sp;return {x:550+(vx*cy-vz*sy)*760/depth,y:330-(vy*cp-radial*sp)*760/depth,depth};}
-function face(points,color){const pts=points.map(p=>project(...p));if(pts.some(p=>p.depth<.4))return;polygons.push({pts,color,depth:pts.reduce((a,p)=>a+p.depth,0)/pts.length});}
-function box(x,y,z,w,h,d,color='#6d9767'){face([[x,y+h,z],[x+w,y+h,z],[x+w,y+h,z+d],[x,y+h,z+d]],color);face([[x,y,z+d],[x+w,y,z+d],[x+w,y+h,z+d],[x,y+h,z+d]],shade(color,.7));face([[x+w,y,z],[x,y,z],[x,y+h,z],[x+w,y+h,z]],shade(color,.65));face([[x,y,z],[x,y,z+d],[x,y+h,z+d],[x,y+h,z]],shade(color,.55));face([[x+w,y,z+d],[x+w,y,z],[x+w,y+h,z],[x+w,y+h,z+d]],shade(color,.8));}
+// The scene uses a depth buffer, rather than sorting whole faces by their centers.
+// This keeps overlapping walls, platforms and the character correct at every orbit angle.
+const sceneCanvas=document.createElement('canvas');sceneCanvas.width=canvas.width;sceneCanvas.height=canvas.height;
+const gl=sceneCanvas.getContext('webgl',{alpha:true,antialias:true,premultipliedAlpha:false});
+const NEAR=.15,FAR=180;
+let sceneProgram,sceneBuffer,positionLocation,colorLocation;
+if(gl){
+ const shader=(type,source)=>{const sh=gl.createShader(type);gl.shaderSource(sh,source);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(sh));return sh;};
+ sceneProgram=gl.createProgram();
+ gl.attachShader(sceneProgram,shader(gl.VERTEX_SHADER,`attribute vec3 position;attribute vec3 color;varying vec3 faceColor;void main(){faceColor=color;gl_Position=vec4(position.x*${2*760/1100},position.y*${2*760/660},position.z*${(FAR+NEAR)/(FAR-NEAR)}-${2*FAR*NEAR/(FAR-NEAR)},position.z);}`));
+ gl.attachShader(sceneProgram,shader(gl.FRAGMENT_SHADER,'precision mediump float;varying vec3 faceColor;void main(){gl_FragColor=vec4(faceColor,1.0);}'));
+ gl.linkProgram(sceneProgram);if(!gl.getProgramParameter(sceneProgram,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(sceneProgram));
+ sceneBuffer=gl.createBuffer();positionLocation=gl.getAttribLocation(sceneProgram,'position');colorLocation=gl.getAttribLocation(sceneProgram,'color');
+ gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LESS);gl.disable(gl.CULL_FACE);
+}
+function cameraSpace(x,y,z){const vx=x-cameraPos.x,vy=y-cameraPos.y,vz=z-cameraPos.z,sy=Math.sin(cameraYaw),cy=Math.cos(cameraYaw),sp=Math.sin(cameraPitch),cp=Math.cos(cameraPitch),radial=vx*sy+vz*cy;return [vx*cy-vz*sy,vy*cp-radial*sp,-radial*cp-vy*sp];}
+function project(x,y,z){const [cx,cy,depth]=cameraSpace(x,y,z);return {x:550+cx*760/depth,y:330-cy*760/depth,depth};}
+function face(points,color){polygons.push({points,pts:points.map(p=>project(...p)),color});}
+function box(x,y,z,w,h,d,color='#6d9767'){
+ face([[x,y+h,z],[x+w,y+h,z],[x+w,y+h,z+d],[x,y+h,z+d]],color);
+ face([[x,y,z],[x+w,y,z],[x+w,y,z+d],[x,y,z+d]],shade(color,.45));
+ face([[x,y,z+d],[x+w,y,z+d],[x+w,y+h,z+d],[x,y+h,z+d]],shade(color,.7));
+ face([[x+w,y,z],[x,y,z],[x,y+h,z],[x+w,y+h,z]],shade(color,.65));
+ face([[x,y,z],[x,y,z+d],[x,y+h,z+d],[x,y+h,z]],shade(color,.55));
+ face([[x+w,y,z+d],[x+w,y,z],[x+w,y+h,z],[x+w,y+h,z+d]],shade(color,.8));
+}
+function renderScene(){
+ if(!gl){renderSoftware();return;}
+ const vertices=[];
+ for(const f of polygons){const rgb=f.color.slice(1).match(/../g).map(v=>parseInt(v,16)/255),pts=f.points.map(p=>cameraSpace(...p));for(const i of [0,1,2,0,2,3])vertices.push(...pts[i],...rgb);}
+ gl.viewport(0,0,sceneCanvas.width,sceneCanvas.height);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(sceneProgram);gl.bindBuffer(gl.ARRAY_BUFFER,sceneBuffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(vertices),gl.DYNAMIC_DRAW);
+ gl.enableVertexAttribArray(positionLocation);gl.vertexAttribPointer(positionLocation,3,gl.FLOAT,false,24,0);gl.enableVertexAttribArray(colorLocation);gl.vertexAttribPointer(colorLocation,3,gl.FLOAT,false,24,12);gl.drawArrays(gl.TRIANGLES,0,vertices.length/6);ctx.drawImage(sceneCanvas,0,0);
+}
+// Depth-buffered fallback for browsers where WebGL is disabled. Clip before projecting.
+let softwareContext,softwareImage,softwareDepth;
+function clipNear(points){const result=[];for(let i=0;i<points.length;i++){const a=points[i],b=points[(i+1)%points.length],insideA=a[2]>=NEAR,insideB=b[2]>=NEAR;if(insideA)result.push(a);if(insideA!==insideB){const t=(NEAR-a[2])/(b[2]-a[2]);result.push([a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1]),NEAR]);}}return result;}
+function renderSoftware(){
+ if(!softwareContext){sceneCanvas.width=550;sceneCanvas.height=330;softwareContext=sceneCanvas.getContext('2d');softwareImage=softwareContext.createImageData(550,330);softwareDepth=new Float32Array(550*330);}
+ const pixels=softwareImage.data;pixels.fill(0);softwareDepth.fill(0);
+ for(const f of polygons){const pts=clipNear(f.points.map(p=>cameraSpace(...p))).map(([x,y,z])=>[275+x*380/z,165-y*380/z,1/z]),rgb=f.color.slice(1).match(/../g).map(v=>parseInt(v,16));for(let i=1;i<pts.length-1;i++)rasterTriangle(pts[0],pts[i],pts[i+1],rgb,pixels);}
+ softwareContext.putImageData(softwareImage,0,0);ctx.drawImage(sceneCanvas,0,0,1100,660);
+}
+function rasterTriangle(a,b,c,rgb,pixels){
+ const area=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);if(Math.abs(area)<1e-8)return;
+ const minX=Math.max(0,Math.floor(Math.min(a[0],b[0],c[0]))),maxX=Math.min(549,Math.ceil(Math.max(a[0],b[0],c[0]))),minY=Math.max(0,Math.floor(Math.min(a[1],b[1],c[1]))),maxY=Math.min(329,Math.ceil(Math.max(a[1],b[1],c[1])));
+ for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++){const px=x+.5,py=y+.5,w0=((b[0]-px)*(c[1]-py)-(b[1]-py)*(c[0]-px))/area,w1=((c[0]-px)*(a[1]-py)-(c[1]-py)*(a[0]-px))/area,w2=1-w0-w1;if(w0<0||w1<0||w2<0)continue;const depth=w0*a[2]+w1*b[2]+w2*c[2],index=y*550+x;if(depth<=softwareDepth[index])continue;softwareDepth[index]=depth;const k=index*4;pixels[k]=rgb[0];pixels[k+1]=rgb[1];pixels[k+2]=rgb[2];pixels[k+3]=255;}
+}
 function shade(c,f){return '#'+c.slice(1).match(/../g).map(v=>Math.round(parseInt(v,16)*f).toString(16).padStart(2,'0')).join('');}
-function label(t,x,y,z,color='#e5edca',size=12){labels.push({t,p:project(x,y,z),color,size});}
-function draw(t){cameraTarget.x+=(player.x-cameraTarget.x)*.12;cameraTarget.y+=(terraces[checkpoint].y+1-cameraTarget.y)*.12;cameraTarget.z+=(player.z-2-cameraTarget.z)*.12;cameraPos={x:cameraTarget.x+Math.sin(cameraYaw)*Math.cos(cameraPitch)*cameraDistance,y:cameraTarget.y+Math.sin(cameraPitch)*cameraDistance,z:cameraTarget.z+Math.cos(cameraYaw)*Math.cos(cameraPitch)*cameraDistance};const bg=ctx.createLinearGradient(0,0,0,660);bg.addColorStop(0,'#172e35');bg.addColorStop(1,'#6a8876');ctx.fillStyle=bg;ctx.fillRect(0,0,1100,660);polygons=[];labels=[];
+function label(t,x,y,z,color='#e5edca',size=12){labels.push({t,p:project(x,y,z),world:[x,y,z],color,size});}
+// Ray/box intersection prevents signs showing through opaque gates and platforms.
+function labelOccluded(point){const origin=[cameraPos.x,cameraPos.y,cameraPos.z],direction=point.map((v,i)=>v-origin[i]);return [...blocks(),...surfaces().map(p=>({x:p.x,y:p.y-.5,z:p.z,w:p.w,h:.5,d:p.d}))].some(b=>{let enter=0,exit=.985;for(let i=0;i<3;i++){const lo=[b.x,b.y,b.z][i],hi=lo+[b.w,b.h,b.d][i];if(Math.abs(direction[i])<1e-8){if(origin[i]<lo||origin[i]>hi)return false;}else{let a=(lo-origin[i])/direction[i],c=(hi-origin[i])/direction[i];if(a>c)[a,c]=[c,a];enter=Math.max(enter,a);exit=Math.min(exit,c);if(enter>exit)return false;}}return exit>0&&enter<.985;});}
+function draw(t){cameraTarget.x+=(player.x-cameraTarget.x)*.12;cameraTarget.y+=(Math.max(player.y,terraces[checkpoint].y)+1-cameraTarget.y)*.12;cameraTarget.z+=(player.z-2-cameraTarget.z)*.12;cameraPos={x:cameraTarget.x+Math.sin(cameraYaw)*Math.cos(cameraPitch)*cameraDistance,y:cameraTarget.y+Math.sin(cameraPitch)*cameraDistance,z:cameraTarget.z+Math.cos(cameraYaw)*Math.cos(cameraPitch)*cameraDistance};const bg=ctx.createLinearGradient(0,0,0,660);bg.addColorStop(0,'#172e35');bg.addColorStop(1,'#6a8876');ctx.fillStyle=bg;ctx.fillRect(0,0,1100,660);polygons=[];labels=[];
 // Distant greenhouse glazing and hanging lights.
 ctx.strokeStyle='#c1dfb015';ctx.lineWidth=2;for(let i=-3;i<=3;i++){ctx.beginPath();ctx.moveTo(550+i*190,0);ctx.lineTo(550+i*400,660);ctx.stroke();}for(let i=0;i<6;i++){ctx.beginPath();ctx.moveTo(0,90+i*100);ctx.lineTo(1100,90+i*100);ctx.stroke();}
-terraces.forEach((p,i)=>{box(p.x,p.y-.8,p.z,p.w,.8,p.d,['#719b75','#7fa783','#91b28a','#87a897','#98b3a0'][i]);for(let z=p.z+1;z<p.z+p.d;z+=2)box(p.x+.1,p.y+.006,z,p.w-.2,.012,.025,'#91b28a');for(let j=0;j<5;j++){const x=j%2?p.x+.4:p.x+p.w-1,z=p.z+1+j*1.7;box(x,p.y,z,.65,.55,.65,'#a88059');box(x+.22,p.y+.55,z+.22,.18,.9,.18,'#5b8257');box(x-.15,p.y+1,z+.12,.95,.17,.35,'#a5c58b');}label(['01 · NURSERY','02 · ROOT ROOM','03 · SUN HOUSE','04 · SKY GARDEN','05 · CROWN CANOPY'][i],0,p.y+.06,p.z+p.d-1,'#e7f2cd',12);if(i<terraces.length-1)label('JUMP THE GAP · SPACE',0,p.y+.1,p.z+.6,'#f5e1a2',12);});
+terraces.forEach((p,i)=>{box(p.x,p.y-.8,p.z,p.w,.8,p.d,['#719b75','#7fa783','#91b28a','#87a897','#98b3a0'][i]);for(let z=p.z+1;z<p.z+p.d;z+=2)box(p.x+.1,p.y+.006,z,p.w-.2,.012,.025,'#91b28a');for(const x of [p.x+.3,p.x+p.w-1]){box(x,p.y,p.z+1,.65,.55,.65,'#a88059');box(x+.22,p.y+.55,p.z+1.22,.18,.9,.18,'#5b8257');box(x-.15,p.y+1,p.z+1.12,.95,.17,.35,'#a5c58b');}label('0'+(i+1)+' · '+zoneNames[i],0,p.y+.08,p.z+p.d-1,'#e7f2cd',12);label('RELEASE Q · JUMP TO THE STONES',0,p.y+.1,p.z+.5,'#f5e1a2',11);});
+for(const p of course){if(!platformActive(p))continue;let color=p.kind==='moving'?'#76b7c8':p.kind==='crumble'?(p.fallAt<Infinity?'#db815c':'#c7a36e'):p.kind==='vent'?(ventActive(p)?'#ed7456':(elapsed+p.zone*.7)%3.8>2.1?'#dfba69':'#8bb9a6'):p.step===8?'#b5c985':'#88a384';box(p.x,p.y-.5,p.z,p.w,.5,p.d,color);label(String(p.step+1).padStart(2,'0'),p.x+p.w/2,p.y+.03,p.z+p.d/2,'#edf4d5',11);if(p.kind==='moving')label('MOVING',p.x+p.w/2,p.y+.5,p.z,'#c7eff3',10);if(p.kind==='crumble')label(p.fallAt<Infinity?'JUMP!':'CRUMBLES',p.x+p.w/2,p.y+.45,p.z,'#ffe0b0',10);if(p.kind==='vent'){label(ventActive(p)?'STEAM!':(elapsed+p.zone*.7)%3.8>2.1?'STEAM SOON':'COOL · CROSS NOW',p.x+p.w/2,p.y+.7,p.z,'#ffdec2',10);if(ventActive(p))for(let j=0;j<3;j++)box(p.x+.25+j*p.w/3,p.y,p.z+p.d*.4,.2,1.1+.3*Math.sin(t*8+j),.2,'#efb9a0');}}
+for(const p of shortcuts){box(p.x,p.y-.2,p.z,p.w,.2,p.d,'#b6aa71');label('OPTIONAL · BALANCE BEAM',p.x+p.w/2,p.y+.5,p.z,'#f3e4a9',10);}
+box(finish.x,finish.y-.8,finish.z,finish.w,.8,finish.d,'#a3ba8c');label('THE FINAL GARDEN',0,5.1,-288.5,'#e8f4c3',12);
 blocks().forEach(b=>box(b.x,b.y,b.z,b.w,b.h,b.d,b.w<2&&b.h<1?'#dba06b':'#527e70'));
 switches.forEach((s,i)=>{box(s.x-1,s.y+.02,s.z-1,2,.14,2,s.on?'#d0e99b':'#ddaa79');box(s.x-.7,s.y+.16,s.z-.7,1.4,s.on?.05:.2,1.4,s.on?'#8ebf72':'#8c6852');label(s.on?'✓ GATE OPEN':'HOLD E · HEAVY SWITCH',s.x,s.y+.7,s.z,'#fff0cd',12);label(s.on?'HOLD Q · TINY GAP':'UNLOCK AT SWITCH',0,s.y+5.4,gateZ[i],'#daedc6',12);});
 seeds.forEach(s=>{if(s.taken)return;const y=s.y+.4+Math.sin(t*3)*.1;box(s.x-.16,y,s.z-.16,.32,.45,.32,'#f8d77a');label('HOLD Q · SEED',s.x,s.y+1.4,s.z,'#ffe8a9',12);});
-box(-3,3.6,-61.7,2.4,.65,2.2,'#c39b70');box(-2.8,4.25,-61.5,2,.08,1.8,'#4c6651');for(let i=0;i<seeds.length;i++)if(seeds[i].taken){box(-2.6+i*.37,4.33,-60.8,.13,.65,.13,'#adc77e');box(-2.8+i*.37,4.8,-60.9,.5,.13,.32,'#dae99e');}label('PLANT ALL FIVE SEEDS',-1.8,5.4,-60.5,'#f4efbe',12);
-perches.forEach(p=>label('JUMP UP · THEN SHRINK',p.x+p.w/2,p.y+.2,p.z+p.d+.5,'#ffe4ad',11));
+box(-1.2,5,-292.2,2.4,.65,2.2,'#c39b70');box(-1,5.65,-292,2,.08,1.8,'#4c6651');for(let i=0;i<seeds.length;i++)if(seeds[i].taken){box(-.8+i*.37,5.73,-291.3,.13,.65,.13,'#adc77e');box(-1+i*.37,6.2,-291.4,.5,.13,.32,'#dae99e');}label('PLANT ALL FIVE SEEDS',0,6.8,-291,'#f4efbe',12);
 // Character with a leafy head and feet; grounded shadow anchors the jump.
 const p=player,r=p.size*.36,h=p.size*1.3;let floor=surfaces().filter(b=>b.y<=p.y+.01).reverse().find(b=>p.x>b.x&&p.x<b.x+b.w&&p.z>b.z&&p.z<b.z+b.d);if(floor)box(p.x-r,floor.y+.02,p.z-r,r*2,.015,r*2,'#4c6e5c');box(p.x-r,p.y+.12*p.size,p.z-r,r*2,h-.12*p.size,r*2,keys.has('e')?'#e7d093':'#daeeb0');box(p.x-.05*p.size,p.y+h,p.z-.05*p.size,.1*p.size,.3*p.size,.1*p.size,'#739c63');box(p.x,p.y+h+.15*p.size,p.z-.1*p.size,.4*p.size,.1*p.size,.22*p.size,'#b4d484');for(const side of [-1,1]){box(p.x+side*r*.48-.045*p.size,p.y+h*.68,p.z+r,.09*p.size,.12*p.size,.025,'#304d42');box(p.x+side*r*.5-.13*p.size,p.y,p.z-r*.5,.26*p.size,.16*p.size,.5*p.size,'#72965f');}
-polygons.sort((a,b)=>b.depth-a.depth);for(const f of polygons){ctx.beginPath();f.pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.fillStyle=f.color;ctx.fill();ctx.strokeStyle='#172e2818';ctx.lineWidth=.5;ctx.stroke();}
-labels.sort((a,b)=>b.p.depth-a.p.depth);for(const l of labels){if(l.p.depth<1||l.p.y<65||l.p.y>640)continue;ctx.font='600 '+l.size+'px system-ui';ctx.textAlign='center';ctx.lineWidth=4;ctx.strokeStyle='#203d35cc';ctx.strokeText(l.t,l.p.x,l.p.y);ctx.fillStyle=l.color;ctx.fillText(l.t,l.p.x,l.p.y);}
+renderScene();
+labels.sort((a,b)=>b.p.depth-a.p.depth);for(const l of labels){if(l.p.depth<NEAR||l.p.depth>65||l.p.y<65||l.p.y>640||labelOccluded(l.world))continue;ctx.font='600 '+l.size+'px system-ui';ctx.textAlign='center';ctx.lineWidth=4;ctx.strokeStyle='#203d35cc';ctx.strokeText(l.t,l.p.x,l.p.y);ctx.fillStyle=l.color;ctx.fillText(l.t,l.p.x,l.p.y);}
 ctx.fillStyle='#142623ed';ctx.fillRect(0,0,1100,60);ctx.font='14px system-ui';ctx.textAlign='left';ctx.fillStyle='#f0d98d';ctx.fillText('✦  '+seeds.filter(s=>s.taken).length+' / '+seeds.length+' SEEDS',25,36);ctx.textAlign='center';ctx.fillStyle='#deedbd';ctx.fillText(p.size<.5?'TINY · COLLECT & SQUEEZE':p.size>1.7?'GIANT · PRESS SWITCHES':'NORMAL · EXPLORE & JUMP',550,36);ctx.textAlign='right';ctx.fillStyle='#c2d8b8';ctx.fillText('TERRACE '+(checkpoint+1)+' / '+terraces.length+'    '+Math.floor(elapsed/60)+':'+String(Math.floor(elapsed%60)).padStart(2,'0'),1075,36);
 if(paused){ctx.fillStyle='#10251c88';ctx.fillRect(0,60,1100,600);}}
 function frame(t){update(Math.min((t-last)/1000||0,.025));last=t;draw(t/1000);requestAnimationFrame(frame);}
